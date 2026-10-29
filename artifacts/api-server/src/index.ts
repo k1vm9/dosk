@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { startBot } from "./lib/bot";
+import { startBot, stopBot } from "./lib/bot";
 
 const rawPort = process.env["PORT"];
 
@@ -12,50 +12,50 @@ if (!rawPort) {
 
 const port = Number(rawPort);
 
-if (Number.isNaN(port) || port <= 0) {
+if (!Number.isInteger(port) || port <= 0 || port > 65535) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-process.on("uncaughtException", (err) => {
-  logger.error({ err }, "خطأ غير متوقع — تم التجاهل للحفاظ على الجلسة");
-});
-
-process.on("unhandledRejection", (reason) => {
-  logger.error({ reason }, "رفض وعد غير معالج — تم التجاهل للحفاظ على الجلسة");
-});
-
-app.listen(port, (err) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
-    process.exit(1);
-  }
-
+const server = app.listen(port, () => {
   logger.info({ port }, "Server listening");
-  startBot();
-  startSelfPing();
+  if (process.env.BOT_ENABLED !== "false") startBot();
+  else logger.info("Bot startup disabled by BOT_ENABLED=false");
 });
 
-function startSelfPing() {
-  const domains = process.env["REPLIT_DOMAINS"];
-  if (!domains) {
-    logger.warn("REPLIT_DOMAINS غير موجود — لن يتم تشغيل Self-Ping");
-    return;
-  }
+server.on("error", (err) => {
+  logger.fatal({ err }, "HTTP server failed to start");
+  process.exit(1);
+});
 
-  const host = domains.split(",")[0]?.trim();
-  const url = `https://${host}/api/healthz`;
+let shuttingDown = false;
+let shutdownExitCode = 0;
 
-  logger.info({ url }, "[Self-Ping] تم تفعيل نظام منع النوم");
+function shutdown(signal: string, exitCode = 0): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  shutdownExitCode = exitCode;
+  logger.info({ signal }, "Shutting down");
+  stopBot();
 
-  // انتظر 10 ثوانٍ ثم ابدأ
-  setTimeout(() => {
-    const ping = () => {
-      fetch(url)
-        .then((r) => logger.info({ status: r.status }, "[Self-Ping] مرسل"))
-        .catch((e) => logger.warn({ err: String(e) }, "[Self-Ping] فشل — إعادة المحاولة لاحقاً"));
-    };
-
-    ping();
-    setInterval(ping, 3 * 60 * 1000); // كل 3 دقائق
-  }, 10_000);
+  const forceExit = setTimeout(() => process.exit(1), 10_000);
+  forceExit.unref();
+  server.close((err) => {
+    clearTimeout(forceExit);
+    if (err) {
+      logger.error({ err }, "Error while closing HTTP server");
+      shutdownExitCode = 1;
+    }
+    process.exitCode = shutdownExitCode;
+  });
 }
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "Uncaught exception; exiting for Railway restart");
+  shutdown("uncaughtException", 1);
+});
+process.on("unhandledRejection", (reason) => {
+  logger.fatal({ reason }, "Unhandled rejection; exiting for Railway restart");
+  shutdown("unhandledRejection", 1);
+});

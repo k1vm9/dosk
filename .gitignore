@@ -10,6 +10,8 @@ out-tsc
 
 # dependencies
 node_modules
+.bot-data/
+artifacts/api-server/cookies.json
 
 # IDEs and editors
 /.idea

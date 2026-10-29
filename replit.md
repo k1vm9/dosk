@@ -1,45 +1,47 @@
-# [Project name]
-
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+# Dosk Bot
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `PORT=8080 pnpm --filter @workspace/api-server run dev` — run the API and panel locally
+- `pnpm run typecheck` — typecheck the workspace
+- `pnpm run railway:build` — build the Railway service
+- `pnpm run railway:start` — start the combined bot and panel service
+- The panel is served at `/api/panel/`; `/` redirects there.
+- The bot and panel use one Railway service. The panel is static and served by Express; no separate frontend or database service is required.
+- Railway configuration is in `.railway/railway.ts`. Review `railway config plan` before applying changes.
+- Set `PANEL_PASSWORD`, `SESSION_SECRET`, and `FB_COOKIES` as Railway service variables. Never put their values in this file or commit them.
+- For session updates to survive redeploys, attach a Railway volume at `/data` and set `BOT_DATA_DIR=/data`. Without a volume, Railway's filesystem is ephemeral and `FB_COOKIES` must remain set to bootstrap the bot after restarts.
+- Keep one replica. Multiple replicas could create multiple bot sessions.
+- Production reads the Messenger session from the volume or the `FB_COOKIES` secret; it does not fall back to the repository's local `cookies.json`.
+- `artifacts/api-server/cookies.json` is tracked in the imported repository. If it contains a live session, rotate that session and remove the credential from Git history.
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
+- pnpm workspaces, Node.js 20+, TypeScript 5.9
 - API: Express 5
-- DB: PostgreSQL + Drizzle ORM
+- Bot: ws3-fca
 - Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/api-server/src/lib/bot.ts` — bot connection and commands
+- `artifacts/api-server/src/routes/` — health, authentication, and bot endpoints
+- `artifacts/api-server/public/` — static private control panel
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
-
-## Product
-
-_Describe the high-level user-facing capabilities of this app once they exist._
+- One Railway service hosts Express, the bot process, and the static panel to avoid separate web and worker services.
+- Railway IaC replaces `railway.toml` because Railway has deprecated Config as Code and stops reading existing TOML/JSON files on December 1, 2026.
+- The panel's bot endpoints require a signed, HTTP-only session cookie and rate-limited password login.
+- Automatic repeating-message commands are disabled; the panel exposes status and a deliberate reconnect action.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- The user wants the bot and panel on Railway without starting many Railway services.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- Railway's project/environment must be linked before applying `.railway/railway.ts`. Review the plan and confirm it updates the intended service rather than creating a duplicate.
+- Railway secrets are configured in Railway, not copied automatically from Replit Secrets.
+- The Replit Canvas artifact is a component-preview sandbox, not the bot control panel.

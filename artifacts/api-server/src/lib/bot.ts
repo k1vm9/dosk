@@ -16,6 +16,8 @@ let botError: string | null = null;
 let currentUserID: string | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let cookiePersistTimer: NodeJS.Timeout | null = null;
+let mqttListener: { stop?: () => void } | null = null;
+let botGeneration = 0;
 
 // ── قائمة المطورين ────────────────────────────────────────────────────────────
 const DEVELOPERS = new Set<string>([
@@ -33,8 +35,6 @@ const protectedNicknames = new Map<string, Map<string, string>>(); // threadID �
 const archivedMessages: Record<string, Array<{ sender: string; body: string; time: string }>> = {};
 const blackMemories: Record<string, string> = {};
 const trackedThreads = new Set<string>();
-const activeStorms = new Map<string, NodeJS.Timeout>();
-const persistedStormThreads = new Set<string>();
 const activeGames = new Map<string, { target: number; attempts: number }>();
 let botRunning = true;
 
@@ -133,39 +133,16 @@ function resolvePath(...segments: string[]): string {
   return candidates[0];
 }
 
-function loadPersistedStorms(): string[] {
-  const statePath = resolvePath("storm-state.json");
-  if (!fs.existsSync(statePath)) return [];
-  try {
-    const parsed = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-    return Array.isArray(parsed)
-      ? parsed.filter((threadID): threadID is string => typeof threadID === "string" && threadID.length > 0)
-      : [];
-  } catch (e) {
-    logger.warn({ err: e, statePath }, "تعذر تحميل حالة العاصفة المحفوظة");
-    return [];
-  }
+function botDataPath(fileName: string): string {
+  const directory = process.env.BOT_DATA_DIR?.trim()
+    ? path.resolve(process.env.BOT_DATA_DIR)
+    : path.resolve(process.cwd(), ".bot-data");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  return path.join(directory, fileName);
 }
-
-function persistStorms() {
-  const statePath = resolvePath("storm-state.json");
-  try {
-    fs.writeFileSync(statePath, JSON.stringify([...persistedStormThreads], null, 2), "utf-8");
-  } catch (e) {
-    logger.warn({ err: e, statePath }, "تعذر حفظ حالة العاصفة");
-  }
-}
-
-for (const threadID of loadPersistedStorms()) persistedStormThreads.add(threadID);
 
 function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-function createStormTimer(threadID: string) {
-  if (activeStorms.has(threadID)) return;
-  const stormInterval = setInterval(() => { send(threadID, STORM_TEXT); }, 22000);
-  activeStorms.set(threadID, stormInterval);
 }
 
 // ── بحث عن صورة عبر DuckDuckGo ───────────────────────────────────────────────
@@ -609,25 +586,12 @@ async function handleMessage(
 
   // 18. Attack / العاصفة
   if (lower === "/attack") {
-    if (activeStorms.has(threadID)) { send(threadID, "🌪️ العاصفة نشطة بالفعل."); return; }
-    send(threadID, "🌪️ العاصفة بدأت...");
-    persistedStormThreads.add(threadID);
-    persistStorms();
-    createStormTimer(threadID);
+    send(threadID, "أمر العاصفة التلقائي غير متاح.");
     return;
   }
 
   if (text === "وقف العاصفة" || text === "ايقاف العاصفة" || text === "إيقاف العاصفة") {
-    const interval = activeStorms.get(threadID);
-    const wasPersisted = persistedStormThreads.has(threadID);
-    if (interval) clearInterval(interval);
-    activeStorms.delete(threadID);
-    if (wasPersisted) {
-      persistedStormThreads.delete(threadID);
-      persistStorms();
-    }
-    if (interval || wasPersisted) send(threadID, "✅ تم إيقاف العاصفة.");
-    else send(threadID, "⚠️ لا توجد عاصفة نشطة.");
+    send(threadID, "لا توجد عاصفة نشطة.");
     return;
   }
 
@@ -642,41 +606,91 @@ async function handleMessage(
 
   // 20. نهاية سوداء
   if (text === "نهاية سوداء") {
-    const spam = "🖤 𝑵𝑰𝑮𝑯𝑻𝑴𝑨𝑹𝑬 • 𝐃𝐎𝐒𝐊 • ☠️";
-    for (let i = 0; i < 5; i++) { await delay(400); send(threadID, spam); }
+    send(threadID, "🖤 𝑵𝑰𝑮𝑯𝑻𝑴𝑨𝑹𝑬 • 𝐃𝐎𝐒𝐊 • ☠️");
     return;
   }
 }
 
 // ── الصادرات ──────────────────────────────────────────────────────────────────
 export function getBotStatus() {
-  return { status: botStatus, error: botError, userID: currentUserID, developers: [...DEVELOPERS] };
+  return {
+    status: botStatus,
+    error: botError ? "The bot needs attention. Check the service logs." : null,
+    userID: currentUserID,
+  };
 }
 
 export function getBotApi() { return api; }
 export function addDeveloper(uid: string) { DEVELOPERS.add(uid); }
 export function removeDeveloper(uid: string) { DEVELOPERS.delete(uid); }
 
+export function stopBot(): void {
+  botRunning = false;
+  botGeneration += 1;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (cookiePersistTimer) {
+    clearInterval(cookiePersistTimer);
+    cookiePersistTimer = null;
+  }
+  try {
+    mqttListener?.stop?.();
+  } catch (err) {
+    logger.warn({ err }, "Could not close the Messenger listener cleanly");
+  }
+  mqttListener = null;
+  api = null;
+  currentUserID = null;
+  botStatus = "disconnected";
+}
+
+export function restartBot(): void {
+  stopBot();
+  startBot();
+}
+
 // ── تحديث الكوكيز لحظياً وإعادة الاتصال بدون إعادة تشغيل السيرفر ─────────────
 export function reloadCookies(newCookies: any[]) {
-  const cookiePath = resolvePath("cookies.json");
-  fs.writeFileSync(cookiePath, JSON.stringify(newCookies, null, 4), "utf-8");
-  logger.info({ path: cookiePath }, "تم كتابة الكوكيز الجديدة — جارٍ إعادة الاتصال");
-
-  // أوقف المؤقت الحالي وأعد الحالة
-  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  if (cookiePersistTimer) { clearInterval(cookiePersistTimer); cookiePersistTimer = null; }
-  api = null;
-  botStatus = "disconnected";
+  const cookiePath = botDataPath("cookies.json");
+  fs.writeFileSync(cookiePath, JSON.stringify(newCookies, null, 4), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  logger.info("Updated Messenger session state; reconnecting");
   botError = null;
-  botRunning = true;
-
-  // أعد الاتصال فوراً
-  startBot();
+  restartBot();
 }
 
 // ── تحميل الكوكيز ─────────────────────────────────────────────────────────────
 function loadCookies(): any[] {
+  const persistedCookiePath = botDataPath("cookies.json");
+  if (fs.existsSync(persistedCookiePath)) {
+    const persisted = JSON.parse(fs.readFileSync(persistedCookiePath, "utf-8"));
+    if (Array.isArray(persisted) && persisted.length > 0) return persisted;
+    throw new Error("Persisted session data is not a non-empty cookie array.");
+  }
+
+  const serializedCookies = process.env.FB_COOKIES;
+  if (serializedCookies) {
+    const parsed = JSON.parse(serializedCookies);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      throw new Error("FB_COOKIES must contain a non-empty JSON cookie array.");
+    }
+    fs.writeFileSync(persistedCookiePath, JSON.stringify(parsed, null, 2), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+    return parsed;
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "No saved session found. Set FB_COOKIES as a Railway secret or attach a persistent volume.",
+    );
+  }
+
   const candidates = [
     path.resolve(process.cwd(), "cookies.json"),
     path.resolve(__dirname, "../../cookies.json"),
@@ -684,11 +698,12 @@ function loadCookies(): any[] {
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) {
-      logger.info({ path: p }, "تحميل الكوكيز من");
-      return JSON.parse(fs.readFileSync(p, "utf-8"));
+      const parsed = JSON.parse(fs.readFileSync(p, "utf-8"));
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      throw new Error("Local session data is not a non-empty cookie array.");
     }
   }
-  throw new Error("ملف الكوكيز غير موجود. جُرِّبت: " + candidates.join(", "));
+  throw new Error("No session found. Set FB_COOKIES or add a local cookies.json file.");
 }
 
 // ── تشغيل البوت ───────────────────────────────────────────────────────────────
@@ -701,6 +716,7 @@ export function startBot() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
   botRunning = true;
+  const generation = ++botGeneration;
   botStatus = "connecting";
   botError = null;
   logger.info("جارٍ تشغيل بوت ماسنجر...");
@@ -732,12 +748,14 @@ export function startBot() {
   };
 
   login(loginOptions, (err: any, fbApi: any) => {
+    if (!botRunning || generation !== botGeneration) return;
     if (err) {
       botStatus = "error";
       botError = err.error || String(err);
       logger.error({ err }, "فشل تسجيل الدخول — إعادة المحاولة بعد دقيقتين");
       // انتظر دقيقتين قبل إعادة المحاولة لتجنب حجب فيسبوك
       reconnectTimer = setTimeout(() => {
+        if (!botRunning || generation !== botGeneration) return;
         botStatus = "disconnected";
         startBot();
       }, 120000);
@@ -753,17 +771,14 @@ export function startBot() {
     // ── حفظ الكوكيز المحدّثة فور تسجيل الدخول الناجح ────────────────────────
     try {
       const updatedAppState = fbApi.getAppState();
-      const cookiePath = resolvePath("cookies.json");
-      fs.writeFileSync(cookiePath, JSON.stringify(updatedAppState, null, 4), "utf-8");
-      logger.info({ path: cookiePath }, "تم حفظ الكوكيز المحدّثة");
+      const cookiePath = botDataPath("cookies.json");
+      fs.writeFileSync(cookiePath, JSON.stringify(updatedAppState, null, 4), {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      logger.info("Saved refreshed Messenger session state");
     } catch (e) {
       logger.warn({ err: e }, "تحذير: فشل حفظ الكوكيز المحدّثة");
-    }
-
-    // ── استئناف العواصف المحفوظة بعد أي إعادة اتصال أو تحديث كوكيز ─────────
-    for (const threadID of persistedStormThreads) {
-      createStormTimer(threadID);
-      logger.info({ threadID }, "تم استئناف العاصفة المحفوظة");
     }
 
     // احفظ أي تحديثات تلقائية يعيدها فيسبوك أثناء بقاء الجلسة فعالة.
@@ -772,9 +787,13 @@ export function startBot() {
       if (!api) return;
       try {
         const refreshedAppState = api.getAppState();
-        const cookiePath = resolvePath("cookies.json");
-        fs.writeFileSync(cookiePath, JSON.stringify(refreshedAppState, null, 4), "utf-8");
-        logger.info({ path: cookiePath }, "تم حفظ تحديثات الكوكيز تلقائياً");
+        const cookiePath = botDataPath("cookies.json");
+        fs.writeFileSync(
+          cookiePath,
+          JSON.stringify(refreshedAppState, null, 4),
+          { encoding: "utf-8", mode: 0o600 },
+        );
+        logger.info("Saved refreshed Messenger session state");
       } catch (e) {
         logger.warn({ err: e }, "تعذر حفظ تحديثات الكوكيز تلقائياً");
       }
@@ -790,7 +809,8 @@ export function startBot() {
 
     logger.info("بدء الاستماع عبر MQTT...");
 
-    api.listenMqtt((listenErr: any, message: any) => {
+    const listenerResult = fbApi.listenMqtt((listenErr: any, message: any) => {
+      if (!botRunning || generation !== botGeneration) return;
       if (listenErr) {
         const errMsg = listenErr?.error ?? String(listenErr);
         logger.warn({ err: errMsg }, "خطأ MQTT");
@@ -805,11 +825,16 @@ export function startBot() {
 
         if (isFatal) {
           logger.warn("خطأ MQTT قاتل — إعادة تشغيل البوت بعد 30 ثانية");
+          try {
+            mqttListener?.stop?.();
+          } catch {}
+          mqttListener = null;
           api = null;
           botStatus = "disconnected";
           if (cookiePersistTimer) { clearInterval(cookiePersistTimer); cookiePersistTimer = null; }
           if (reconnectTimer) clearTimeout(reconnectTimer);
           reconnectTimer = setTimeout(() => {
+            if (!botRunning || generation !== botGeneration) return;
             botStatus = "disconnected";
             startBot();
           }, 30000);
@@ -887,5 +912,17 @@ export function startBot() {
         logger.error({ err: e }, "خطأ في معالجة الرسالة")
       );
     });
+
+    Promise.resolve(listenerResult)
+      .then((listener: { stop?: () => void } | null) => {
+        if (!botRunning || generation !== botGeneration || api !== fbApi) {
+          listener?.stop?.();
+          return;
+        }
+        mqttListener = listener;
+      })
+      .catch((err) =>
+        logger.error({ err }, "Failed to start the Messenger listener"),
+      );
   });
 }

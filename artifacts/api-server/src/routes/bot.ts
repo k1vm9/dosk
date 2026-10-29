@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getBotStatus, getBotApi, startBot, addDeveloper, removeDeveloper, reloadCookies } from "../lib/bot.js";
+import { getBotStatus, getBotApi, restartBot, addDeveloper, removeDeveloper, reloadCookies } from "../lib/bot.js";
 
 const botRouter = Router();
 
@@ -19,8 +19,8 @@ botRouter.post("/bot/send", (req, res) => {
 });
 
 botRouter.post("/bot/restart", (_req, res) => {
-  startBot();
-  res.json({ message: "جارٍ إعادة تشغيل البوت..." });
+  restartBot();
+  res.json({ message: "جارٍ إعادة اتصال البوت..." });
 });
 
 botRouter.post("/bot/developer/add", (req, res) => {

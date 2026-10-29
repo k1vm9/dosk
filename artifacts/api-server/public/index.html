@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Private status and controls for the Dosk bot."
+    />
+    <title>Dosk Bot Control</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./panel.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Dosk Bot home">
+          <span class="brand-mark" aria-hidden="true">D</span>
+          <span>DOSK<span class="brand-light">BOT</span></span>
+        </a>
+        <span class="environment"><span class="live-dot"></span>CONTROL PANEL</span>
+      </header>
+
+      <section class="intro">
+        <p class="eyebrow">SERVICE OVERVIEW</p>
+        <h1>Bot control</h1>
+        <p class="intro-copy">Check the connection and manage the running service.</p>
+      </section>
+
+      <section id="login-card" class="card login-card" hidden>
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">PRIVATE ACCESS</p>
+            <h2>Sign in</h2>
+          </div>
+          <span class="lock-mark" aria-hidden="true">•••</span>
+        </div>
+        <p id="configuration-note" class="notice" hidden>
+          Add PANEL_PASSWORD and SESSION_SECRET to the Railway service variables
+          before signing in.
+        </p>
+        <form id="login-form">
+          <label for="password">Panel password</label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+          <p id="login-error" class="error-message" role="alert" hidden></p>
+          <button class="button button-primary" type="submit">Sign in</button>
+        </form>
+      </section>
+
+      <section id="dashboard" hidden>
+        <article class="card status-card">
+          <div class="card-heading">
+            <div>
+              <p class="eyebrow">MESSENGER CONNECTION</p>
+              <h2>Current status</h2>
+            </div>
+            <span id="status-pill" class="status-pill status-unknown">
+              <span class="status-dot"></span>
+              <span id="status-label">Checking</span>
+            </span>
+          </div>
+          <p id="status-detail" class="status-detail">
+            Waiting for the service response…
+          </p>
+          <div class="card-actions">
+            <button id="refresh-button" class="button button-secondary" type="button">
+              Refresh status
+            </button>
+            <button id="restart-button" class="button button-primary" type="button">
+              Reconnect bot
+            </button>
+          </div>
+          <p id="action-message" class="action-message" role="status" hidden></p>
+        </article>
+
+        <footer class="dashboard-footer">
+          <span>Status refreshes every 15 seconds</span>
+          <button id="logout-button" class="text-button" type="button">
+            Sign out
+          </button>
+        </footer>
+      </section>
+
+      <p id="page-error" class="error-message page-error" role="alert" hidden></p>
+      <footer class="page-footer">
+        <span>Dosk Bot</span>
+        <span>Private service dashboard</span>
+      </footer>
+    </main>
+  </body>
+</html>
